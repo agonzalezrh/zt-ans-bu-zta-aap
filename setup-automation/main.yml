@@ -3,8 +3,8 @@
   hosts: localhost
   gather_facts: false
 
-  # vars_files:
-  #   - ../config/secrets.yaml  # NOTE: this is inclueded later in this document
+  vars_files:
+    - ../config/secrets.yaml  # NOTE: this is inclueded later in this document
 
   tasks:
   - name: Add bastion host
