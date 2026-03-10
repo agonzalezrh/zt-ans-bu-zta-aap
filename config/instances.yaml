@@ -251,7 +251,7 @@ virtualmachines:
 
 
   - name: "wazuh"
-    image: "rhel-9.5"
+    image: "project-zero-wazuh-base-all"
     memory: "16G"
     cores: 2
     image_size: "50Gi"
