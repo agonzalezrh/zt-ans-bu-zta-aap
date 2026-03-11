@@ -2,11 +2,11 @@
 
 nmcli connection add type ethernet con-name eth1 ifname eth1 ipv4.addresses 192.168.1.12/24 ipv4.method manual connection.autoconnect yes
 nmcli connection up eth1
-echo "192.168.1.10 control.lab control" >> /etc/hosts
-echo "192.168.1.11 central.lab central" >> /etc/hosts
-echo "192.168.1.12 vault.lab vault" >> /etc/hosts
-echo "192.168.1.13 wazuh.lab wazuh" >> /etc/hosts
-echo "192.168.1.14 node01.lab node01" >> /etc/hosts
+echo "192.168.1.10 control.zta.lab control" >> /etc/hosts
+echo "192.168.1.11 central.zta.lab central" >> /etc/hosts
+echo "192.168.1.12 vault.zta.lab vault" >> /etc/hosts
+echo "192.168.1.13 wazuh.zta.lab wazuh" >> /etc/hosts
+echo "192.168.1.14 node01.zta.lab node01" >> /etc/hosts
 
 if [ -n "$VAULT_LIC" ]; then
     # Write new license
