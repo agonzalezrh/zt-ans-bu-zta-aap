@@ -33,7 +33,7 @@ tee /tmp/zta-setup.yml << EOF
 
 ---
 - name: Verify ZTA Lab services on central.zta.lab
-  hosts: all
+  hosts: localhost
   become: true
   gather_facts: true
 
@@ -158,5 +158,5 @@ tee /tmp/zta-setup.yml << EOF
           - "============================================="
 EOF
 
-ansible-playbook -i /tmp/inventory /tmp/setup.yml
+ansible-playbook -i /tmp/inventory /tmp/zta-setup.yml
 
