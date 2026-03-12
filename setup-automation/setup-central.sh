@@ -28,6 +28,9 @@ subscription-manager register --org=${SATELLITE_ORG} --activationkey=${SATELLITE
 dnf install -y python3-pip python3-libsemanage git ansible-core
 
 
+# Create a playbook for the user to execute
+tee /tmp/zta-setup.yml << EOF
+
 ---
 - name: Verify ZTA Lab services on central.zta.lab
   hosts: all
@@ -153,4 +156,7 @@ dnf install -y python3-pip python3-libsemanage git ansible-core
           - "  DNS:        OK - all records resolve"
           - "  Kerberos:   OK - admin ticket obtained"
           - "============================================="
+EOF
+
+ansible-playbook -i /tmp/inventory /tmp/setup.yml
 
