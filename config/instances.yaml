@@ -217,7 +217,7 @@ virtualmachines:
         - echo "PasswordAuthentication yes" > /etc/ssh/sshd_config.d/50-cloud-init.conf
         - systemctl reload sshd
   - name: "central"
-    image: "idm-keycloak-clone1.qcow2"
+    image: "rhel-idm-opa"
     memory: "32G"
     cores: 4
     image_size: "50Gi"
