@@ -4,7 +4,7 @@ systemctl stop systemd-tmpfiles-setup.service
 systemctl disable systemd-tmpfiles-setup.service
 
 echo "192.168.1.10 control.zta.lab control" >> /etc/hosts
-echo "192.168.1.11 central.zta.lab central" >> /etc/hosts
+echo "192.168.1.11  central.zta.lab  keycloak.zta.lab  opa.zta.lab" >> /etc/hosts
 echo "192.168.1.12 vault.zta.lab vault" >> /etc/hosts
 echo "192.168.1.13 wazuh.zta.lab wazuh" >> /etc/hosts
 echo "192.168.1.14 node01.zta.lab node01" >> /etc/hosts
