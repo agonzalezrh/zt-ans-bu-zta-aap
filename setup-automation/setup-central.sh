@@ -12,7 +12,6 @@ echo "192.168.1.14 node01.zta.lab node01" >> /etc/hosts
 nmcli connection add type ethernet con-name enp2s0 ifname enp2s0 ipv4.addresses 192.168.1.11/24 ipv4.method manual connection.autoconnect yes
 nmcli connection up enp2s0
 
-
 rm -rf /etc/yum.repos.d/*
 yum clean all
 subcription-manager clean
