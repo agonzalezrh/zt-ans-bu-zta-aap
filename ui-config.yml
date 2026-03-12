@@ -6,8 +6,17 @@ tabs:
     external: false
   - name: "Terminal"
     url: /wetty_central
-  - name: Wazuh
-    url: https://wazuh-web-${guid}.${domain}
+  - name: IDM
+    url: https://idm-web-${guid}.${domain}
+    external: true
+  - name: Keycloak
+    url: https://keycloak-web-${guid}.${domain}
+    external: true
+  - name: OPA
+    url: https://opa-web-${guid}.${domain}
+    external: true    
   - name: HashiCorp Vault
     url: https://vault-${guid}.${domain}/ui/vault/unseal
     external: true
+  - name: Wazuh
+    url: https://wazuh-web-${guid}.${domain} 
