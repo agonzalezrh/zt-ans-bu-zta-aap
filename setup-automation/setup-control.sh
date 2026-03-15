@@ -168,3 +168,5 @@ tee /tmp/setup.yml << EOF
 # export ANSIBLE_INVENTORY_UNPARSED_WARNING=False
 
 # ANSIBLE_COLLECTIONS_PATH=/root/ansible-automation-platform-containerized-setup/collections/ansible_collections ansible-playbook -i /tmp/inventory /tmp/setup.yml
+
+git clone https://github.com/nmartins0611/zta-aap-workshop.git /tmp/
