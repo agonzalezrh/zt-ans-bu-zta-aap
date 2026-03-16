@@ -3,6 +3,9 @@
 systemctl stop systemd-tmpfiles-setup.service
 systemctl disable systemd-tmpfiles-setup.service
 
+export KC_HOSTNAME_STRICT=false
+export KC_PROXY_HEADERS=xforwarded
+
 rm -rf /etc/yum.repos.d/*
 yum clean all
 subscription-manager clean
