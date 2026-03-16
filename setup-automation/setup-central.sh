@@ -26,7 +26,7 @@ retry "subscription-manager register --org=${SATELLITE_ORG} --activationkey=${SA
 retry "dnf install -y dnf-utils git nano"
 retry "dnf install -y python3-pip python3-libsemanage git ansible-core python-requests"
 setenforce 0
-git clone https://github.com/nmartins0611/zta-workshop-aap.git /tmp/
+git clone https://github.com/nmartins0611/zta-workshop-aap.git /tmp/zta-workshop-aap
 
 mkdir /tmp/group_vars
 
@@ -744,30 +744,30 @@ echo "192.168.1.15 netbox.zta.lab netbox" >> /etc/hosts
 nmcli connection add type ethernet con-name enp2s0 ifname enp2s0 ipv4.addresses 192.168.1.11/24 ipv4.method manual connection.autoconnect yes
 nmcli connection up enp2s0
 
-## Correct Keycloak
-podman stop keycloak
-podman rm keycloak
+# ## Correct Keycloak
+# podman stop keycloak
+# podman rm keycloak
 
-podman run -d \
-  --name keycloak \
-  --restart=always \
-  -p 8180:8080 \
-  -p 8543:8443 \
-  -e KEYCLOAK_ADMIN=admin \
-  -e KEYCLOAK_ADMIN_PASSWORD=ansible123! \
-  -e KC_HTTP_ENABLED=true \
-  -e KC_HOSTNAME_STRICT=false \
-  -e KC_PROXY=edge \
-  -e KC_HTTPS_CERTIFICATE_FILE=/opt/certs/server.crt \
-  -e KC_HTTPS_CERTIFICATE_KEY_FILE=/opt/certs/server.key \
-  -v /opt/keycloak/certs:/opt/certs:Z \
-  registry.redhat.io/rhbk/keycloak-rhel9:latest \
-  start \
-  --hostname-strict=false \
-  --proxy=edge \
-  --https-port=8443 \
-  --http-enabled=true
-##
+# podman run -d \
+#   --name keycloak \
+#   --restart=always \
+#   -p 8180:8080 \
+#   -p 8543:8443 \
+#   -e KEYCLOAK_ADMIN=admin \
+#   -e KEYCLOAK_ADMIN_PASSWORD=ansible123! \
+#   -e KC_HTTP_ENABLED=true \
+#   -e KC_HOSTNAME_STRICT=false \
+#   -e KC_PROXY=edge \
+#   -e KC_HTTPS_CERTIFICATE_FILE=/opt/certs/server.crt \
+#   -e KC_HTTPS_CERTIFICATE_KEY_FILE=/opt/certs/server.key \
+#   -v /opt/keycloak/certs:/opt/certs:Z \
+#   registry.redhat.io/rhbk/keycloak-rhel9:latest \
+#   start \
+#   --hostname-strict=false \
+#   --proxy=edge \
+#   --https-port=8443 \
+#   --http-enabled=true
+# ##
 
 
 # Create a playbook for the user to execute
