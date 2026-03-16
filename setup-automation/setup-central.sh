@@ -500,3 +500,5 @@ RewriteCond %{REQUEST_URI}  !^/ipa/crl
 RewriteCond %{REQUEST_URI}  !^/(ca|kra|pki|acme)
 IPA
 systemctl reload httpd
+
+ansible-playbook -i /tmp/inventory /tmp/zta-workshop-aap/integrate.yml 
