@@ -20,8 +20,8 @@ retry "curl -k -L https://${SATELLITE_URL}/pub/katello-server-ca.crt -o /etc/pki
 retry "update-ca-trust"
 retry "rpm -Uhv --force https://${SATELLITE_URL}/pub/katello-ca-consumer-latest.noarch.rpm"
 retry "subscription-manager register --force --org=${SATELLITE_ORG} --activationkey=${SATELLITE_ACTIVATIONKEY}"
-retry "dnf install -y dnf-utils git nano"
-retry "dnf install -y python3-pip python3-libsemanage git python-requests ipa-client sssd oddjob-mkhomedir postgresql-server postgresql python3-psycopg2 python3-flask wazuh-agent"
+retry "dnf install -y dnf-utils git nano python3-pip python3-libsemanage git ipa-client sssd oddjob-mkhomedir"
+
 setenforce 0
 
 
