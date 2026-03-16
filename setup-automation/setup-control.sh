@@ -3,6 +3,9 @@
 systemctl stop systemd-tmpfiles-setup.service
 systemctl disable systemd-tmpfiles-setup.service
 
+rm -rf /etc/yum.repos.d/*
+yum clean all
+subscription-manager clean
 
 retry() {
     for i in {1..3}; do
