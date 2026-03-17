@@ -14,16 +14,32 @@ retry() {
     exit 1
 }
 
-# Clean up existing repos and subscriptions
+# Validate required variables
+for var in SATELLITE_URL SATELLITE_ORG SATELLITE_ACTIVATIONKEY; do
+    if [ -z "${!var}" ]; then
+        echo "ERROR: $var is not set"
+        exit 1
+    fi
+done
+
+# Clean up existing repos, subscriptions, and registration
 rm -rf /etc/yum.repos.d/*
 yum clean all
+subscription-manager unregister 2>/dev/null || true
+subscription-manager remove --all 2>/dev/null || true
 subscription-manager clean
 
+# Remove old Katello consumer RPM if present
+rpm -e $(rpm -qa | grep katello-ca-consumer) 2>/dev/null || true
+
 # Register with Satellite
-retry "curl -k -L https://${SATELLITE_URL}/pub/katello-server-ca.crt -o /etc/pki/ca-trust/source/anchors/${SATELLITE_URL}.ca.crt" "Download Katello CA cert"
+retry "curl -sS -k -L https://${SATELLITE_URL}/pub/katello-server-ca.crt -o /etc/pki/ca-trust/source/anchors/${SATELLITE_URL}.ca.crt" "Download Katello CA cert"
 retry "update-ca-trust" "Update CA trust"
 retry "rpm -Uhv --force https://${SATELLITE_URL}/pub/katello-ca-consumer-latest.noarch.rpm" "Install Katello consumer RPM"
-retry "subscription-manager register --org=${SATELLITE_ORG} --activationkey=${SATELLITE_ACTIVATIONKEY} --force" "Register with Satellite"
+retry "subscription-manager register --org=${SATELLITE_ORG} --activationkey=${SATELLITE_ACTIVATIONKEY}" "Register with Satellite"
+
+# Refresh subscription data
+retry "subscription-manager refresh" "Refresh subscription"
 
 # Install packages and Docker
 retry "dnf install -y dnf-utils git nano" "Install base packages"
