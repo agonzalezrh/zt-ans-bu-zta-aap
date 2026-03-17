@@ -23,7 +23,7 @@ retry "rpm -Uhv --force https://${SATELLITE_URL}/pub/katello-ca-consumer-latest.
 retry "subscription-manager register --org=${SATELLITE_ORG} --activationkey=${SATELLITE_ACTIVATIONKEY} --force"
 retry "dnf install -y dnf-utils git nano"
 retry "dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo"
-retry "dnf install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin python3-pip python3-libsemanage git ansible-core python-requests ipa-client sssd oddjob-mkhomedir postgresql-server postgresql python3-psycopg2 python3-flask -y"
+retry "dnf install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin python3-pip python3-libsemanage git ansible-core python-requests ipa-client sssd oddjob-mkhomedir postgresql-server postgresql python3-psycopg2 -y"
 setenforce 0
 
 echo "192.168.1.10 control.zta.lab control" >> /etc/hosts
