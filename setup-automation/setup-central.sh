@@ -74,17 +74,17 @@ done
 # 2. Disable tmpfiles service
 ###############################################################################
 
-if systemctl is-active --quiet systemd-tmpfiles-setup.service; then
-    systemctl stop systemd-tmpfiles-setup.service
-else
-    echo "SKIP: systemd-tmpfiles-setup already stopped"
-fi
+# if systemctl is-active --quiet systemd-tmpfiles-setup.service; then
+#     systemctl stop systemd-tmpfiles-setup.service
+# else
+#     echo "SKIP: systemd-tmpfiles-setup already stopped"
+# fi
 
-if systemctl is-enabled --quiet systemd-tmpfiles-setup.service 2>/dev/null; then
-    systemctl disable systemd-tmpfiles-setup.service
-else
-    echo "SKIP: systemd-tmpfiles-setup already disabled"
-fi
+# if systemctl is-enabled --quiet systemd-tmpfiles-setup.service 2>/dev/null; then
+#     systemctl disable systemd-tmpfiles-setup.service
+# else
+#     echo "SKIP: systemd-tmpfiles-setup already disabled"
+# fi
 
 ###############################################################################
 # 3. Clean repos & subscriptions (only if not already registered)
