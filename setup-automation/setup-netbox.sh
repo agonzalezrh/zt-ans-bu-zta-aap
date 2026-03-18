@@ -24,8 +24,6 @@ retry() {
     exit 1
 }
 
-# Usage: run_if_needed "Description" check_cmd [args...] -- action_cmd [args...]
-# Everything before -- is the check; everything after is the action.
 run_if_needed() {
     local desc="$1"
     shift
@@ -33,11 +31,31 @@ run_if_needed() {
     while [[ "$1" != "--" ]]; do
         check+=("$1"); shift
     done
-    shift  # drop the --
+    shift
     if "${check[@]}" &>/dev/null; then
         echo "SKIP (already done): $desc"
     else
         retry "$desc" "$@"
+    fi
+}
+
+ensure_hosts_entry() {
+    local ip="$1"
+    local names="$2"
+    if grep -q "^${ip} " /etc/hosts 2>/dev/null; then
+        echo "SKIP: /etc/hosts already has entry for ${ip}"
+    else
+        echo "${ip} ${names}" >> /etc/hosts
+    fi
+}
+
+ensure_nmcli_connection() {
+    local con_name="$1"
+    shift
+    if nmcli connection show "$con_name" &>/dev/null; then
+        echo "SKIP: nmcli connection '${con_name}' already exists"
+    else
+        nmcli connection add "$@"
     fi
 }
 
@@ -53,28 +71,40 @@ for var in SATELLITE_URL SATELLITE_ORG SATELLITE_ACTIVATIONKEY; do
 done
 
 ###############################################################################
-# 2. Clean repos & subscriptions
-#    Gate on registration status — no point wiping a valid setup on re-run
+# 2. SELinux — set permissive (idempotent)
+###############################################################################
+
+CURRENT_MODE=$(getenforce)
+if [ "${CURRENT_MODE}" = "Permissive" ] || [ "${CURRENT_MODE}" = "Disabled" ]; then
+    echo "SKIP: SELinux already in ${CURRENT_MODE} mode"
+else
+    setenforce 0
+    echo "SELinux set to Permissive"
+fi
+
+###############################################################################
+# 3. Clean repos & subscriptions (only if not registered)
 ###############################################################################
 
 if subscription-manager status &>/dev/null; then
     echo "SKIP: Already registered with Satellite – skipping clean/unregister"
 else
     echo "Cleaning existing repos and subscriptions..."
-    rm -rf /etc/yum.repos.d/*
-    yum clean all
+    dnf clean all || true
+    rm -f /etc/yum.repos.d/redhat-rhui*.repo
+    sed -i 's/enabled=1/enabled=0/' /etc/dnf/plugins/amazon-id.conf 2>/dev/null || true
     subscription-manager unregister 2>/dev/null || true
     subscription-manager remove --all 2>/dev/null || true
     subscription-manager clean
 
     OLD_KATELLO=$(rpm -qa | grep katello-ca-consumer || true)
     if [ -n "$OLD_KATELLO" ]; then
-        rpm -e "$OLD_KATELLO"
+        rpm -e "$OLD_KATELLO" 2>/dev/null || true
     fi
 fi
 
 ###############################################################################
-# 3. Register with Satellite
+# 4. Register with Satellite
 ###############################################################################
 
 CA_CERT="/etc/pki/ca-trust/source/anchors/${SATELLITE_URL}.ca.crt"
@@ -87,7 +117,7 @@ run_if_needed "Download Katello CA cert" \
         -o "${CA_CERT}"
 
 retry "Update CA trust" \
-    update-ca-trust
+    update-ca-trust extract
 
 run_if_needed "Install Katello consumer RPM" \
     rpm -q katello-ca-consumer \
@@ -105,7 +135,7 @@ retry "Refresh subscription" \
     subscription-manager refresh
 
 ###############################################################################
-# 4. Install packages and Docker
+# 5. Install packages and Docker
 ###############################################################################
 
 run_if_needed "Install base packages" \
@@ -128,7 +158,7 @@ run_if_needed "Install Docker" \
         docker-buildx-plugin docker-compose-plugin
 
 ###############################################################################
-# 5. Enable & start Docker
+# 6. Enable & start Docker (idempotent)
 ###############################################################################
 
 if ! systemctl is-enabled --quiet docker 2>/dev/null; then
@@ -143,43 +173,45 @@ else
     echo "SKIP: Docker already running"
 fi
 
-echo "✓ Setup complete"
+###############################################################################
+# 7. /etc/hosts (idempotent)
+###############################################################################
 
-setenforce 0
+ensure_hosts_entry "192.168.1.10" "control.zta.lab control"
+ensure_hosts_entry "192.168.1.11" "central.zta.lab keycloak.zta.lab opa.zta.lab"
+ensure_hosts_entry "192.168.1.12" "vault.zta.lab vault"
+ensure_hosts_entry "192.168.1.13" "wazuh.zta.lab wazuh"
+ensure_hosts_entry "192.168.1.14" "node01.zta.lab node01"
+ensure_hosts_entry "192.168.1.15" "netbox.zta.lab netbox"
 
 ###############################################################################
-# Network configuration
+# 8. Network configuration (idempotent)
 ###############################################################################
-nmcli connection add type ethernet con-name eth1 ifname eth1 \
+
+ensure_nmcli_connection "eth1" \
+    type ethernet con-name eth1 ifname eth1 \
     ipv4.addresses 192.168.1.15/24 \
     ipv4.method manual \
     connection.autoconnect yes
 
-nmcli connection up eth1
+nmcli connection up eth1 || true
 
 ###############################################################################
-# /etc/hosts entries
+# 9. Clone NetBox Docker repo (idempotent)
 ###############################################################################
-cat >> /etc/hosts <<EOF
-192.168.1.10 control.zta.lab control
-192.168.1.11 central.zta.lab keycloak.zta.lab opa.zta.lab
-192.168.1.12 vault.zta.lab vault
-192.168.1.13 wazuh.zta.lab wazuh
-192.168.1.14 node01.zta.lab node01
-192.168.1.15 netbox.zta.lab netbox
-EOF
+
+if [ -d /tmp/netbox-docker ]; then
+    echo "SKIP: /tmp/netbox-docker already exists"
+else
+    retry "Clone netbox-docker repo" \
+        git clone --depth=1 -b 3.3.0 \
+        https://github.com/netbox-community/netbox-docker.git /tmp/netbox-docker
+fi
 
 ###############################################################################
-# Clone NetBox Docker repo
+# 10. Docker Compose override (always write — config may have changed)
 ###############################################################################
-rm -rf /tmp/netbox-docker
-retry "Clone netbox-docker repo" \
-    git clone --depth=1 -b 3.3.0 \
-    https://github.com/netbox-community/netbox-docker.git /tmp/netbox-docker
 
-###############################################################################
-# Docker Compose override
-###############################################################################
 cat > /tmp/netbox-docker/docker-compose.override.yml <<'EOF'
 services:
   netbox:
@@ -201,11 +233,9 @@ services:
 EOF
 
 ###############################################################################
-# Start Docker and deploy NetBox
+# 11. Wait for Docker daemon and deploy NetBox
 ###############################################################################
-systemctl enable --now docker
 
-# Wait for Docker socket
 for i in {1..10}; do
     docker info &>/dev/null && break
     echo "Waiting for Docker daemon... ($i)"
@@ -218,4 +248,4 @@ retry "Pull NetBox images" \
 retry "Start NetBox containers" \
     docker compose --project-directory=/tmp/netbox-docker up -d netbox netbox-worker
 
-echo "Setup complete!"
+echo "✓ netbox setup complete"

@@ -1,40 +1,78 @@
 #!/bin/bash
 set -euo pipefail
 
-# ─────────────────────────────────────────────
+###############################################################################
 # Helpers
-# ─────────────────────────────────────────────
+###############################################################################
 
 retry() {
-    local cmd="$1"
-    local desc="${2:-$1}"
-    for i in {1..3}; do
-        echo "Attempt $i: $desc"
-        if eval "$cmd"; then
+    local max_attempts=3
+    local delay=5
+    local desc="$1"
+    shift
+    for ((i = 1; i <= max_attempts; i++)); do
+        echo "Attempt $i/$max_attempts: $desc"
+        if "$@"; then
             return 0
         fi
-        [ $i -lt 3 ] && sleep 5
+        if [ $i -lt $max_attempts ]; then
+            echo "  Failed. Retrying in ${delay}s..."
+            sleep $delay
+        fi
     done
-    echo "ERROR: Failed after 3 attempts: $desc"
+    echo "FATAL: Failed after $max_attempts attempts: $desc"
     exit 1
 }
 
-# Run a command only if a condition check fails (i.e. work not yet done)
-# Usage: run_if_needed "check_cmd" "action_cmd" "description"
 run_if_needed() {
-    local check="$1"
-    local cmd="$2"
-    local desc="$3"
-    if eval "$check" &>/dev/null; then
+    local desc="$1"
+    shift
+    local check=()
+    while [[ "$1" != "--" ]]; do
+        check+=("$1"); shift
+    done
+    shift
+    if "${check[@]}" &>/dev/null; then
         echo "SKIP (already done): $desc"
     else
-        retry "$cmd" "$desc"
+        retry "$desc" "$@"
     fi
 }
 
-# ─────────────────────────────────────────────
-# 1. Disable tmpfiles service
-# ─────────────────────────────────────────────
+ensure_hosts_entry() {
+    local ip="$1"
+    local names="$2"
+    if grep -q "^${ip} " /etc/hosts 2>/dev/null; then
+        echo "SKIP: /etc/hosts already has entry for ${ip}"
+    else
+        echo "${ip} ${names}" >> /etc/hosts
+    fi
+}
+
+ensure_nmcli_connection() {
+    local con_name="$1"
+    shift
+    if nmcli connection show "$con_name" &>/dev/null; then
+        echo "SKIP: nmcli connection '${con_name}' already exists"
+    else
+        nmcli connection add "$@"
+    fi
+}
+
+###############################################################################
+# 1. Validate required variables
+###############################################################################
+
+for var in SATELLITE_URL SATELLITE_ORG SATELLITE_ACTIVATIONKEY; do
+    if [ -z "${!var:-}" ]; then
+        echo "ERROR: $var is not set"
+        exit 1
+    fi
+done
+
+###############################################################################
+# 2. Disable tmpfiles service
+###############################################################################
 
 if systemctl is-active --quiet systemd-tmpfiles-setup.service; then
     systemctl stop systemd-tmpfiles-setup.service
@@ -48,103 +86,116 @@ else
     echo "SKIP: systemd-tmpfiles-setup already disabled"
 fi
 
-# ─────────────────────────────────────────────
-# 2. Clean up repos and subscriptions
-#    Only wipe if we are NOT already registered
-#    (avoids nuking a valid subscription on re-run)
-# ─────────────────────────────────────────────
+###############################################################################
+# 3. Clean repos & subscriptions (only if not already registered)
+###############################################################################
 
 if subscription-manager status &>/dev/null; then
-    echo "SKIP: Already registered with Satellite – skipping repo/subscription clean"
+    echo "SKIP: Already registered with Satellite – skipping clean/unregister"
 else
     echo "Cleaning existing repos and subscriptions..."
-    rm -rf /etc/yum.repos.d/*
-    yum clean all
+    dnf clean all || true
+    rm -f /etc/yum.repos.d/redhat-rhui*.repo
+    sed -i 's/enabled=1/enabled=0/' /etc/dnf/plugins/amazon-id.conf 2>/dev/null || true
+    subscription-manager unregister 2>/dev/null || true
+    subscription-manager remove --all 2>/dev/null || true
     subscription-manager clean
+
+    OLD_KATELLO=$(rpm -qa | grep katello-ca-consumer || true)
+    if [ -n "$OLD_KATELLO" ]; then
+        rpm -e "$OLD_KATELLO" 2>/dev/null || true
+    fi
 fi
 
-# ─────────────────────────────────────────────
-# 3. Register with Satellite
-# ─────────────────────────────────────────────
+###############################################################################
+# 4. Register with Satellite
+###############################################################################
 
 CA_CERT="/etc/pki/ca-trust/source/anchors/${SATELLITE_URL}.ca.crt"
-run_if_needed \
-    "test -f ${CA_CERT}" \
-    "curl -fk -L https://${SATELLITE_URL}/pub/katello-server-ca.crt -o ${CA_CERT}" \
-    "Download Katello CA cert"
 
-# Always re-run update-ca-trust if we just downloaded a new cert; safe to re-run anyway
-retry "update-ca-trust" "Update CA trust"
+run_if_needed "Download Katello CA cert" \
+    test -f "${CA_CERT}" \
+    -- \
+    curl -fsSkL \
+        "https://${SATELLITE_URL}/pub/katello-server-ca.crt" \
+        -o "${CA_CERT}"
 
-run_if_needed \
-    "rpm -q katello-ca-consumer" \
-    "rpm -Uhv --force https://${SATELLITE_URL}/pub/katello-ca-consumer-latest.noarch.rpm" \
-    "Install Katello consumer RPM"
+retry "Update CA trust" \
+    update-ca-trust extract
 
-run_if_needed \
-    "subscription-manager status" \
-    "subscription-manager register --org=${SATELLITE_ORG} --activationkey=${SATELLITE_ACTIVATIONKEY}" \
-    "Register with Satellite"
+run_if_needed "Install Katello consumer RPM" \
+    rpm -q katello-ca-consumer \
+    -- \
+    rpm -Uhv --force "https://${SATELLITE_URL}/pub/katello-ca-consumer-latest.noarch.rpm"
 
-# ─────────────────────────────────────────────
-# 4. Install packages
-# ─────────────────────────────────────────────
+run_if_needed "Register with Satellite" \
+    subscription-manager status \
+    -- \
+    subscription-manager register \
+        --org="${SATELLITE_ORG}" \
+        --activationkey="${SATELLITE_ACTIVATIONKEY}"
 
-BASE_PKGS="dnf-utils git nano"
-SYSTEM_PKGS="python3-pip python3-libsemanage git ansible-core python-requests ipa-client sssd oddjob-mkhomedir"
+retry "Refresh subscription" \
+    subscription-manager refresh
 
-# rpm -q accepts a space-separated list and exits non-zero if any are missing
-run_if_needed \
-    "rpm -q ${BASE_PKGS}" \
-    "dnf install -y ${BASE_PKGS}" \
-    "Install base packages"
+###############################################################################
+# 5. Install packages
+###############################################################################
 
-run_if_needed \
-    "rpm -q ${SYSTEM_PKGS}" \
-    "dnf install -y ${SYSTEM_PKGS}" \
-    "Install system packages"
+run_if_needed "Install base packages" \
+    rpm -q dnf-utils git nano \
+    -- \
+    dnf install -y dnf-utils git nano
 
-echo "✓ Setup complete"
-git clone https://github.com/nmartins0611/zta-workshop-aap.git /tmp/zta-workshop-aap" "Clone ZTA workshop repo
+run_if_needed "Install system packages" \
+    rpm -q python3-pip python3-libsemanage ansible-core python-requests ipa-client sssd oddjob-mkhomedir \
+    -- \
+    dnf install -y python3-pip python3-libsemanage git ansible-core python-requests \
+                   ipa-client sssd oddjob-mkhomedir
 
-mkdir /tmp/group_vars
+###############################################################################
+# 6. /etc/hosts (idempotent)
+###############################################################################
 
-# podman stop keycloak
-# podman rm keycloak
+ensure_hosts_entry "192.168.1.10" "control.zta.lab control"
+ensure_hosts_entry "192.168.1.11" "central.zta.lab keycloak.zta.lab opa.zta.lab"
+ensure_hosts_entry "192.168.1.12" "vault.zta.lab vault"
+ensure_hosts_entry "192.168.1.13" "wazuh.zta.lab wazuh"
+ensure_hosts_entry "192.168.1.14" "node01.zta.lab node01"
+ensure_hosts_entry "192.168.1.15" "netbox.zta.lab netbox"
 
-# # Then re-run with the new -e flags added to your existing podman run command:
-# podman run -d \
-#   --name keycloak \
-#   --restart=always \
-#   -p 8080:8080 \
-#   -p 8443:8443 \
-#   -e KEYCLOAK_ADMIN=admin \
-#   -e KEYCLOAK_ADMIN_PASSWORD=ansible123! \
-#   -e KC_HOSTNAME_STRICT=false \
-#   -e KC_PROXY_HEADERS=xforwarded \
-#   -e KC_HTTPS_CERTIFICATE_FILE=/opt/certs/server.crt \
-#   -e KC_HTTPS_CERTIFICATE_KEY_FILE=/opt/certs/server.key \
-#   -e KC_HTTP_ENABLED=true \
-#   -v /opt/keycloak/certs:/opt/certs:Z \
-#   b89b0ff472ca \
-#   start \
-#   --https-port=8443 \
-#   --http-enabled=true
+###############################################################################
+# 7. Network configuration (idempotent)
+###############################################################################
 
+ensure_nmcli_connection "enp2s0" \
+    type ethernet con-name enp2s0 ifname enp2s0 \
+    ipv4.addresses 192.168.1.11/24 \
+    ipv4.method manual \
+    connection.autoconnect yes
 
-echo "192.168.1.10 control.zta.lab control" >> /etc/hosts
-echo "192.168.1.11 central.zta.lab  keycloak.zta.lab  opa.zta.lab" >> /etc/hosts
-echo "192.168.1.12 vault.zta.lab vault" >> /etc/hosts
-echo "192.168.1.13 wazuh.zta.lab wazuh" >> /etc/hosts
-echo "192.168.1.14 node01.zta.lab node01" >> /etc/hosts
-echo "192.168.1.15 netbox.zta.lab netbox" >> /etc/hosts
+nmcli connection up enp2s0 || true
 
-tee /tmp/group_vars/all.yml << EOF
+###############################################################################
+# 8. Clone workshop repo (idempotent)
+###############################################################################
+
+if [ -d /tmp/zta-workshop-aap ]; then
+    echo "SKIP: /tmp/zta-workshop-aap already exists"
+else
+    retry "Clone ZTA workshop repo" \
+        git clone https://github.com/nmartins0611/zta-workshop-aap.git /tmp/zta-workshop-aap
+fi
+
+###############################################################################
+# 9. Create supporting directories and files
+###############################################################################
+
+mkdir -p /tmp/group_vars
+
+tee /tmp/group_vars/all.yml << 'EOF'
 ---
 # ── Lab Identity ─────────────────────────────────────────────────────
-# Auto-discovered from the target VM's facts.  Override at runtime:
-#   ansible-playbook <playbook> -e idm_domain=custom.lab
-
 idm_hostname: central.zta.lab
 idm_domain: zta.lab
 idm_realm: "{{ idm_domain | upper }}"
@@ -225,11 +276,7 @@ idm_groups:
     description: Can approve maintenance windows and change requests
 
 # ── IdM Users ──────────────────────────────────────────────────────
-# The first 4 are the primary workshop scenario users.
-# The remaining 15 populate the directory to make it feel real-world.
-# All passwords: {{ idm_admin_password }}
 idm_workshop_users:
-  # Workshop scenario accounts
   - uid: ztauser
     first: ZTA
     last: User
@@ -250,8 +297,6 @@ idm_workshop_users:
     last: Engineer
     title: Workshop Network Engineer (no groups — will be denied)
     groups: []
-
-  # Infrastructure team
   - uid: jsmith
     first: James
     last: Smith
@@ -277,8 +322,6 @@ idm_workshop_users:
     last: Garcia
     title: Network Engineer
     groups: [network-admins, team-infrastructure]
-
-  # DevOps team
   - uid: lkim
     first: Lisa
     last: Kim
@@ -294,8 +337,6 @@ idm_workshop_users:
     last: Sato
     title: Platform Engineer
     groups: [app-deployers, patch-admins, team-devops]
-
-  # Security team
   - uid: mrodriguez
     first: Maria
     last: Rodriguez
@@ -306,8 +347,6 @@ idm_workshop_users:
     last: Patel
     title: Security Analyst
     groups: [security-ops, team-security]
-
-  # Application team
   - uid: twright
     first: Tom
     last: Wright
@@ -357,20 +396,16 @@ vlans:
     network: 10.10.0.0/24
 EOF
 
-
-tee /tmp/requirements.yml << EOF
+tee /tmp/requirements.yml << 'EOF'
 ---
 collections:
   - name: cisco.ios
   - name: ansible.netcommon
   - name: community.postgresql
   - name: community.general
-
 EOF
 
-tee /tmp/inventory << EOF
-# ZTA Workshop Inventory
-
+tee /tmp/inventory << 'EOF'
 [zta_services]
 central ansible_host=central.zta.lab
 
@@ -383,9 +418,6 @@ netbox ansible_host=netbox.zta.lab
 [wazuh_servers]
 wazuh ansible_host=wazuh.zta.lab
 
-# [gitea_servers]
-# gitea ansible_host=gitea.zta.lab
-
 [automation]
 control ansible_host=control.zta.lab
 
@@ -395,17 +427,10 @@ app ansible_host=node01.zta.lab
 [db_servers]
 db ansible_host=node01.zta.lab
 
-# [network]
-# cisco ansible_host=cisco
-
-# All Linux hosts except central (IdM server) and the Cisco switch.
-# Used by setup/enroll-idm-clients.yml.
 [idm_clients:children]
 vault_servers
 netbox_servers
 wazuh_servers
-#gitea_servers
-#automation
 app_servers
 db_servers
 
@@ -414,23 +439,20 @@ ansible_user=rhel
 ansible_password=ansible123!
 ansible_become_password=ansible123!
 ansible_python_interpreter=/usr/bin/python3
-
-# [network:vars]
-# ansible_user=admin
-# ansible_password=cisco123!
-# ansible_network_os=cisco.ios.ios
-# ansible_connection=ansible.netcommon.network_cli
-
 EOF
 
-ansible-galaxy collection install -r collections/requirements.yml
+###############################################################################
+# 10. Install Ansible collections
+###############################################################################
 
-nmcli connection add type ethernet con-name enp2s0 ifname enp2s0 ipv4.addresses 192.168.1.11/24 ipv4.method manual connection.autoconnect yes
-nmcli connection up enp2s0
+retry "Install Ansible collections" \
+    ansible-galaxy collection install -r /tmp/requirements.yml
 
-# Create a playbook for the user to execute
-tee /tmp/zta-setup.yml << EOF
+###############################################################################
+# 11. ZTA verification playbook + integrate
+###############################################################################
 
+tee /tmp/zta-setup.yml << 'PLAYBOOK'
 ---
 - name: Verify ZTA Lab services on central.zta.lab
   hosts: localhost
@@ -442,6 +464,9 @@ tee /tmp/zta-setup.yml << EOF
     - name: Start IdM services
       ansible.builtin.command:
         cmd: ipactl start
+      register: _ipactl
+      changed_when: "'already running' not in _ipactl.stdout | default('')"
+      failed_when: _ipactl.rc != 0
 
     - name: Check hostname
       ansible.builtin.command:
@@ -560,23 +585,35 @@ tee /tmp/zta-setup.yml << EOF
           - "  DNS:        OK - all records resolve"
           - "  Kerberos:   OK - admin ticket obtained"
           - "============================================="
-EOF
+PLAYBOOK
 
 ansible-playbook -i /tmp/inventory /tmp/zta-setup.yml
 
-tee /etc/httpd/conf.d/ipa-rewrite.conf << IPA
+###############################################################################
+# 12. IPA rewrite config (idempotent)
+###############################################################################
+
+IPA_REWRITE="/etc/httpd/conf.d/ipa-rewrite.conf"
+if grep -q "VERSION 7" "$IPA_REWRITE" 2>/dev/null; then
+    echo "SKIP: ipa-rewrite.conf already configured"
+else
+    tee "$IPA_REWRITE" << 'IPA'
 # VERSION 7 - DO NOT REMOVE THIS LINE
 RequestHeader set Host central.zta.lab
 RequestHeader set Referer https://central.zta.lab/ipa/ui/
 RewriteEngine on
-
-# Rewrite for plugin index, make it like it's a static file
 RewriteRule ^/ipa/ui/js/freeipa/plugins.js$    /ipa/wsgi/plugins.py [PT]
-
 RewriteCond %{HTTP_HOST}    ^ipa-ca.example.local$ [NC]
 RewriteCond %{REQUEST_URI}  !^/ipa/crl
 RewriteCond %{REQUEST_URI}  !^/(ca|kra|pki|acme)
 IPA
-systemctl reload httpd
+    systemctl reload httpd
+fi
 
-ansible-playbook -i /tmp/inventory /tmp/zta-workshop-aap/integrate.yml 
+###############################################################################
+# 13. Run integration playbook
+###############################################################################
+
+ansible-playbook -i /tmp/inventory /tmp/zta-workshop-aap/integrate.yml
+
+echo "✓ central setup complete"

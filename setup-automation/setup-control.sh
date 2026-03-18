@@ -1,315 +1,192 @@
-# #!/bin/bash
-# set -euo pipefail
-
-# ###############################################################################
-# # Helpers
-# ###############################################################################
-
-# retry() {
-#     local desc="$1"
-#     shift
-#     local max_attempts=3
-#     local delay=5
-#     for ((i = 1; i <= max_attempts; i++)); do
-#         echo "Attempt $i/$max_attempts: $desc"
-#         if "$@"; then
-#             return 0
-#         fi
-#         if [ $i -lt $max_attempts ]; then
-#             echo "  Failed. Retrying in ${delay}s..."
-#             sleep $delay
-#         fi
-#     done
-#     echo "FATAL: Failed after $max_attempts attempts: $desc"
-#     exit 1
-# }
-
-# # Usage: run_if_needed "Description" check_cmd [args...] -- action_cmd [args...]
-# run_if_needed() {
-#     local desc="$1"
-#     shift
-#     local check=()
-#     while [[ "$1" != "--" ]]; do
-#         check+=("$1"); shift
-#     done
-#     shift  # drop the --
-#     if "${check[@]}" &>/dev/null; then
-#         echo "SKIP (already done): $desc"
-#     else
-#         retry "$desc" "$@"
-#     fi
-# }
-
-# ###############################################################################
-# # 1. Validate required variables
-# ###############################################################################
-
-# for var in SATELLITE_URL SATELLITE_ORG SATELLITE_ACTIVATIONKEY; do
-#     if [ -z "${!var:-}" ]; then
-#         echo "ERROR: $var is not set"
-#         exit 1
-#     fi
-# done
-
-# ###############################################################################
-# # 2. Clean repos & subscriptions
-# #    Gate on registration status to avoid wiping a valid setup on re-run
-# ###############################################################################
-
-# if subscription-manager status &>/dev/null; then
-#     echo "SKIP: Already registered with Satellite – skipping clean/unregister"
-# else
-#     echo "Cleaning existing repos and subscriptions..."
-#     dnf clean all || true
-#     rm -f /etc/yum.repos.d/redhat-rhui*.repo
-
-#     # Disable AWS-specific dnf plugin (noisy traceback on non-AWS or post-Satellite)
-#     sed -i 's/enabled=1/enabled=0/' /etc/dnf/plugins/amazon-id.conf 2>/dev/null || true
-
-#     subscription-manager unregister 2>/dev/null || true
-#     subscription-manager remove --all 2>/dev/null || true
-#     subscription-manager clean
-
-#     OLD_KATELLO=$(rpm -qa | grep katello-ca-consumer || true)
-#     if [ -n "$OLD_KATELLO" ]; then
-#         rpm -e "$OLD_KATELLO"
-#     fi
-# fi
-
-# ###############################################################################
-# # 3. Register with Satellite
-# ###############################################################################
-
-# CA_CERT="/etc/pki/ca-trust/source/anchors/${SATELLITE_URL}.ca.crt"
-
-# run_if_needed "Download Katello CA cert" \
-#     test -f "${CA_CERT}" \
-#     -- \
-#     curl -fsSkL \
-#         "https://${SATELLITE_URL}/pub/katello-server-ca.crt" \
-#         -o "${CA_CERT}"
-
-# retry "Update CA trust" \
-#     update-ca-trust extract
-
-# run_if_needed "Install Katello consumer RPM" \
-#     rpm -q katello-ca-consumer \
-#     -- \
-#     rpm -Uhv --force "https://${SATELLITE_URL}/pub/katello-ca-consumer-latest.noarch.rpm"
-
-# run_if_needed "Register with Satellite" \
-#     subscription-manager status \
-#     -- \
-#     subscription-manager register \
-#         --org="${SATELLITE_ORG}" \
-#         --activationkey="${SATELLITE_ACTIVATIONKEY}"
-
-# retry "Refresh subscription" \
-#     subscription-manager refresh
-
-# ###############################################################################
-# # 4. Install packages
-# ###############################################################################
-
-# run_if_needed "Install base packages" \
-#     rpm -q dnf-utils git nano \
-#     -- \
-#     dnf install -y dnf-utils git nano
-
-# DOCKER_REPO_FILE="/etc/yum.repos.d/docker-ce.repo"
-
-# run_if_needed "Add Docker repo" \
-#     test -f "${DOCKER_REPO_FILE}" \
-#     -- \
-#     dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-
-# run_if_needed "Install IPA client packages" \
-#     rpm -q ipa-client sssd oddjob-mkhomedir \
-#     -- \
-#     dnf install -y ipa-client sssd oddjob-mkhomedir
-
-# run_if_needed "Install Python3 libraries" \
-#     rpm -q python3-pip python3-libsemanage \
-#     -- \
-#     dnf install -y python3-pip python3-libsemanage
-
-# ###############################################################################
-# # 5. SELinux
-# ###############################################################################
-
-# CURRENT_MODE=$(getenforce)
-# if [ "${CURRENT_MODE}" = "Permissive" ] || [ "${CURRENT_MODE}" = "Disabled" ]; then
-#     echo "SKIP: SELinux already in ${CURRENT_MODE} mode"
-# else
-#     setenforce 0
-#     echo "SELinux set to Permissive"
-# fi
-
-# echo "✓ Setup complete"
-###############################################################################
-# SELinux
-###############################################################################
-setenforce 0
+#!/bin/bash
+set -euo pipefail
 
 ###############################################################################
-# /etc/hosts
+# Helpers
 ###############################################################################
-cat >> /etc/hosts <<EOF
-192.168.1.10 control.zta.lab control
-192.168.1.11 central.zta.lab keycloak.zta.lab opa.zta.lab
-192.168.1.12 vault.zta.lab vault
-192.168.1.13 wazuh.zta.lab wazuh
-192.168.1.14 node01.zta.lab node01
-192.168.1.15 netbox.zta.lab netbox
-EOF
+
+retry() {
+    local max_attempts=3
+    local delay=5
+    local desc="$1"
+    shift
+    for ((i = 1; i <= max_attempts; i++)); do
+        echo "Attempt $i/$max_attempts: $desc"
+        if "$@"; then
+            return 0
+        fi
+        if [ $i -lt $max_attempts ]; then
+            echo "  Failed. Retrying in ${delay}s..."
+            sleep $delay
+        fi
+    done
+    echo "FATAL: Failed after $max_attempts attempts: $desc"
+    exit 1
+}
+
+run_if_needed() {
+    local desc="$1"
+    shift
+    local check=()
+    while [[ "$1" != "--" ]]; do
+        check+=("$1"); shift
+    done
+    shift
+    if "${check[@]}" &>/dev/null; then
+        echo "SKIP (already done): $desc"
+    else
+        retry "$desc" "$@"
+    fi
+}
+
+ensure_hosts_entry() {
+    local ip="$1"
+    local names="$2"
+    if grep -q "^${ip} " /etc/hosts 2>/dev/null; then
+        echo "SKIP: /etc/hosts already has entry for ${ip}"
+    else
+        echo "${ip} ${names}" >> /etc/hosts
+    fi
+}
+
+ensure_nmcli_connection() {
+    local con_name="$1"
+    shift
+    if nmcli connection show "$con_name" &>/dev/null; then
+        echo "SKIP: nmcli connection '${con_name}' already exists"
+    else
+        nmcli connection add "$@"
+    fi
+}
 
 ###############################################################################
-# Network configuration
+# 1. Validate required variables
 ###############################################################################
-nmcli connection add type ethernet con-name eth1 ifname eth1 \
+
+for var in SATELLITE_URL SATELLITE_ORG SATELLITE_ACTIVATIONKEY; do
+    if [ -z "${!var:-}" ]; then
+        echo "ERROR: $var is not set"
+        exit 1
+    fi
+done
+
+###############################################################################
+# 2. SELinux — set permissive (idempotent)
+###############################################################################
+
+CURRENT_MODE=$(getenforce)
+if [ "${CURRENT_MODE}" = "Permissive" ] || [ "${CURRENT_MODE}" = "Disabled" ]; then
+    echo "SKIP: SELinux already in ${CURRENT_MODE} mode"
+else
+    setenforce 0
+    echo "SELinux set to Permissive"
+fi
+
+###############################################################################
+# 3. /etc/hosts (idempotent)
+###############################################################################
+
+ensure_hosts_entry "192.168.1.10" "control.zta.lab control"
+ensure_hosts_entry "192.168.1.11" "central.zta.lab keycloak.zta.lab opa.zta.lab"
+ensure_hosts_entry "192.168.1.12" "vault.zta.lab vault"
+ensure_hosts_entry "192.168.1.13" "wazuh.zta.lab wazuh"
+ensure_hosts_entry "192.168.1.14" "node01.zta.lab node01"
+ensure_hosts_entry "192.168.1.15" "netbox.zta.lab netbox"
+
+###############################################################################
+# 4. Network configuration (idempotent)
+###############################################################################
+
+ensure_nmcli_connection "eth1" \
+    type ethernet con-name eth1 ifname eth1 \
     ipv4.addresses 192.168.1.10/24 \
     ipv4.method manual \
     ipv4.dns 192.168.1.11 \
     ipv4.dns-search zta.lab \
     connection.autoconnect yes
 
-nmcli connection up eth1
+nmcli connection up eth1 || true
 
-# Create a playbook for the user to execute
-tee /tmp/setup.yml << EOF
-# ### Automation Controller setup
-# ###
-# ---
-# - name: Setup Controller
-#   hosts: localhost
-#   connection: local
-#   collections:
-#     - ansible.controller
+###############################################################################
+# 5. Clean repos & subscriptions (only if not registered)
+###############################################################################
 
-#   vars:
-#     aws_access_key: "{{ lookup('env', 'AWS_ACCESS_KEY_ID') | default('AWS_ACCESS_KEY_ID_NOT_FOUND', true) }}"
-#     aws_secret_key: "{{ lookup('env', 'AWS_SECRET_ACCESS_KEY') | default('AWS_SECRET_ACCESS_KEY_NOT_FOUND', true) }}"
-#     aws_default_region: "{{ lookup('env', 'AWS_DEFAULT_REGION') | default('AWS_DEFAULT_REGION_NOT_FOUND', true) }}"
-#     quay_username: "{{ lookup('env', 'QUAY_USERNAME') | default('QUAY_USERNAME_NOT_FOUND', true) }}"
-#     quay_password: "{{ lookup('env', 'QUAY_PASSWORD') | default('QUAY_PASSWORD_NOT_FOUND', true) }}"
-#     ssh_private_key: "{{ lookup('env', 'SSH_KEY') | default('SSH_KEY_NOT_FOUND', true) }}"
+if subscription-manager status &>/dev/null; then
+    echo "SKIP: Already registered with Satellite – skipping clean/unregister"
+else
+    echo "Cleaning existing repos and subscriptions..."
+    dnf clean all || true
+    rm -f /etc/yum.repos.d/redhat-rhui*.repo
+    sed -i 's/enabled=1/enabled=0/' /etc/dnf/plugins/amazon-id.conf 2>/dev/null || true
+    subscription-manager unregister 2>/dev/null || true
+    subscription-manager remove --all 2>/dev/null || true
+    subscription-manager clean
 
-#   tasks:
-#     - name: Add AWS credential
-#       ansible.controller.credential:
-#         name: 'AWS Credential'
-#         organization: Default
-#         credential_type: "Amazon Web Services"
-#         controller_host: "https://localhost"
-#         controller_username: admin
-#         controller_password: ansible123!
-#         validate_certs: false
-#         inputs:
-#           username: "{{ aws_access_key }}"
-#           password: "{{ aws_secret_key }}"
+    OLD_KATELLO=$(rpm -qa | grep katello-ca-consumer || true)
+    if [ -n "$OLD_KATELLO" ]; then
+        rpm -e "$OLD_KATELLO" 2>/dev/null || true
+    fi
+fi
 
-#     - name: Add SSH Private Key credential
-#       ansible.controller.credential:
-#         name: 'SSH Credentials'
-#         description: Creds to SSH to the inventory RHEL hosts
-#         organization: "Default"
-#         state: present
-#         credential_type: "Machine"
-#         controller_username: admin
-#         controller_password: ansible123!
-#         controller_host: "https://localhost"
-#         validate_certs: false
-#         inputs:
-#           username: ec2-user
-#           ssh_key_data: "{{ ssh_private_key }}"
-#       register: controller_try
-#       retries: 10
-#       until: controller_try is not failed
+###############################################################################
+# 6. Register with Satellite
+###############################################################################
 
-#     - name: Add a Container Registry Credential to automation controller
-#       ansible.controller.credential:
-#         name: Quay Registry Credential
-#         description: Creds to be able to access Quay
-#         organization: "Default"
-#         state: present
-#         credential_type: "Container Registry"
-#         controller_username: admin
-#         controller_password: ansible123!
-#         controller_host: "https://localhost"
-#         validate_certs: false
-#         inputs:
-#           username: "{{ quay_username }}"
-#           password: "{{ quay_password }}"
-#           host: "quay.io"
-#       register: controller_try
-#       retries: 10
-#       until: controller_try is not failed
+CA_CERT="/etc/pki/ca-trust/source/anchors/${SATELLITE_URL}.ca.crt"
 
-#     - name: Add EE to the controller instance
-#       ansible.controller.execution_environment:
-#         name: "Terraform Execution Environment"
-#         image: quay.io/acme_corp/terraform_ee
-#         credential: Quay Registry Credential
-#         controller_username: admin
-#         controller_password: ansible123!
-#         controller_host: "https://localhost"
-#         validate_certs: false
+run_if_needed "Download Katello CA cert" \
+    test -f "${CA_CERT}" \
+    -- \
+    curl -fsSkL \
+        "https://${SATELLITE_URL}/pub/katello-server-ca.crt" \
+        -o "${CA_CERT}"
 
-#     - name: Add project
-#       ansible.controller.project:
-#         name: "Terraform Demos Project"
-#         description: "This is from the GitHub repository for this labs content"
-#         organization: "Default"
-#         state: present
-#         scm_type: git
-#         scm_url: https://github.com/ansible-tmm/aap-hashi-lab.git
-#         default_environment: "Terraform Execution Environment"
-#         controller_username: admin
-#         controller_password: ansible123!
-#         controller_host: "https://localhost"
-#         validate_certs: false
+retry "Update CA trust" \
+    update-ca-trust extract
 
-#     - name: Delete native job template
-#       ansible.controller.job_template:
-#         name: "Demo Job Template"
-#         state: "absent"
-#         controller_username: admin
-#         controller_password: ansible123!
-#         controller_host: "https://localhost"
-#         validate_certs: false
+run_if_needed "Install Katello consumer RPM" \
+    rpm -q katello-ca-consumer \
+    -- \
+    rpm -Uhv --force "https://${SATELLITE_URL}/pub/katello-ca-consumer-latest.noarch.rpm"
 
-#     - name: Add a TERRAFORM INVENTORY
-#       ansible.controller.inventory:
-#         name: "Terraform Inventory"
-#         description: "Our Terraform Inventory"
-#         organization: "Default"
-#         state: present
-#         controller_username: admin
-#         controller_password: ansible123!
-#         controller_host: "https://localhost"
-#         validate_certs: false
+run_if_needed "Register with Satellite" \
+    subscription-manager status \
+    -- \
+    subscription-manager register \
+        --org="${SATELLITE_ORG}" \
+        --activationkey="${SATELLITE_ACTIVATIONKEY}"
 
-#     - name: Installs Nginx on the RHEL hosts
-#       ansible.controller.job_template:
-#         name: "Install Nginx on RHEL"
-#         description: "Install Nginx on RHEL"
-#         job_type: "run"
-#         organization: "Default"
-#         state: present
-#         inventory: "Terraform Inventory"
-#         project: "Terraform Demos Project"
-#         playbook: "playbooks/install_nginx-rhel.yml"
-#         credentials:
-#           - "SSH Credentials"
-#         controller_username: admin
-#         controller_password: ansible123!
-#         controller_host: "https://localhost"
-#         validate_certs: false
+retry "Refresh subscription" \
+    subscription-manager refresh
 
-# EOF
-# export ANSIBLE_LOCALHOST_WARNING=False
-# export ANSIBLE_INVENTORY_UNPARSED_WARNING=False
+###############################################################################
+# 7. Install packages
+###############################################################################
 
-# ANSIBLE_COLLECTIONS_PATH=/root/ansible-automation-platform-containerized-setup/collections/ansible_collections ansible-playbook -i /tmp/inventory /tmp/setup.yml
+run_if_needed "Install base packages" \
+    rpm -q dnf-utils git nano \
+    -- \
+    dnf install -y dnf-utils git nano
 
-git clone https://github.com/nmartins0611/zta-aap-workshop.git /tmp/
+run_if_needed "Install IPA client packages" \
+    rpm -q ipa-client sssd oddjob-mkhomedir \
+    -- \
+    dnf install -y ipa-client sssd oddjob-mkhomedir
+
+run_if_needed "Install Python3 libraries" \
+    rpm -q python3-pip python3-libsemanage \
+    -- \
+    dnf install -y python3-pip python3-libsemanage
+
+###############################################################################
+# 8. Clone workshop repo (idempotent)
+###############################################################################
+
+if [ -d /tmp/zta-aap-workshop ]; then
+    echo "SKIP: /tmp/zta-aap-workshop already exists"
+else
+    retry "Clone ZTA AAP workshop repo" \
+        git clone https://github.com/nmartins0611/zta-aap-workshop.git /tmp/zta-aap-workshop
+fi
+
+echo "✓ control setup complete"

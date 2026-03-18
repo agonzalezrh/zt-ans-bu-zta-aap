@@ -1,55 +1,183 @@
 #!/bin/bash
+set -euo pipefail
 
-systemctl stop systemd-tmpfiles-setup.service
-systemctl disable systemd-tmpfiles-setup.service
+###############################################################################
+# Helpers
+###############################################################################
 
-echo "192.168.1.10 control.zta.lab control" >> /etc/hosts
-echo "192.168.1.11 central.zta.lab  keycloak.zta.lab  opa.zta.lab" >> /etc/hosts
-echo "192.168.1.12 vault.zta.lab vault" >> /etc/hosts
-echo "192.168.1.13 wazuh.zta.lab wazuh" >> /etc/hosts
-echo "192.168.1.14 node01.zta.lab node01" >> /etc/hosts
-echo "192.168.1.15 netbox.zta.lab netbox" >> /etc/hosts
+retry() {
+    local max_attempts=3
+    local delay=5
+    local desc="$1"
+    shift
+    for ((i = 1; i <= max_attempts; i++)); do
+        echo "Attempt $i/$max_attempts: $desc"
+        if "$@"; then
+            return 0
+        fi
+        if [ $i -lt $max_attempts ]; then
+            echo "  Failed. Retrying in ${delay}s..."
+            sleep $delay
+        fi
+    done
+    echo "FATAL: Failed after $max_attempts attempts: $desc"
+    exit 1
+}
 
-nmcli connection add type ethernet con-name eth1 ifname enp2s0 ipv4.addresses 192.168.1.13/24 ipv4.method manual connection.autoconnect yes
+run_if_needed() {
+    local desc="$1"
+    shift
+    local check=()
+    while [[ "$1" != "--" ]]; do
+        check+=("$1"); shift
+    done
+    shift
+    if "${check[@]}" &>/dev/null; then
+        echo "SKIP (already done): $desc"
+    else
+        retry "$desc" "$@"
+    fi
+}
+
+ensure_hosts_entry() {
+    local ip="$1"
+    local names="$2"
+    if grep -q "^${ip} " /etc/hosts 2>/dev/null; then
+        echo "SKIP: /etc/hosts already has entry for ${ip}"
+    else
+        echo "${ip} ${names}" >> /etc/hosts
+    fi
+}
+
+ensure_nmcli_connection() {
+    local con_name="$1"
+    shift
+    if nmcli connection show "$con_name" &>/dev/null; then
+        echo "SKIP: nmcli connection '${con_name}' already exists"
+    else
+        nmcli connection add "$@"
+    fi
+}
+
+###############################################################################
+# 1. Validate required variables
+###############################################################################
+
+for var in SATELLITE_URL SATELLITE_ORG SATELLITE_ACTIVATIONKEY; do
+    if [ -z "${!var:-}" ]; then
+        echo "ERROR: $var is not set"
+        exit 1
+    fi
+done
+
+###############################################################################
+# 2. Disable tmpfiles service (idempotent)
+###############################################################################
+
+if systemctl is-active --quiet systemd-tmpfiles-setup.service; then
+    systemctl stop systemd-tmpfiles-setup.service
+else
+    echo "SKIP: systemd-tmpfiles-setup already stopped"
+fi
+
+if systemctl is-enabled --quiet systemd-tmpfiles-setup.service 2>/dev/null; then
+    systemctl disable systemd-tmpfiles-setup.service
+else
+    echo "SKIP: systemd-tmpfiles-setup already disabled"
+fi
+
+###############################################################################
+# 3. /etc/hosts (idempotent)
+###############################################################################
+
+ensure_hosts_entry "192.168.1.10" "control.zta.lab control"
+ensure_hosts_entry "192.168.1.11" "central.zta.lab keycloak.zta.lab opa.zta.lab"
+ensure_hosts_entry "192.168.1.12" "vault.zta.lab vault"
+ensure_hosts_entry "192.168.1.13" "wazuh.zta.lab wazuh"
+ensure_hosts_entry "192.168.1.14" "node01.zta.lab node01"
+ensure_hosts_entry "192.168.1.15" "netbox.zta.lab netbox"
+
+###############################################################################
+# 4. Network configuration (idempotent)
+###############################################################################
+
+ensure_nmcli_connection "enp2s0" \
+    type ethernet con-name enp2s0 ifname enp2s0 \
+    ipv4.addresses 192.168.1.13/24 \
+    ipv4.method manual \
+    connection.autoconnect yes
+
 nmcli con mod enp2s0 ipv4.dns 192.168.1.11
 nmcli con mod enp2s0 ipv4.dns-search zta.lab
-nmcli con up enp2s0
+nmcli connection up enp2s0 || true
 
-rm -rf /etc/yum.repos.d/*
-yum clean all
-subcription-manager clean
+###############################################################################
+# 5. Clean repos & subscriptions (only if not registered)
+###############################################################################
 
-curl -k  -L https://${SATELLITE_URL}/pub/katello-server-ca.crt -o /etc/pki/ca-trust/source/anchors/${SATELLITE_URL}.ca.crt
-update-ca-trust
-rpm -Uhv https://${SATELLITE_URL}/pub/katello-ca-consumer-latest.noarch.rpm
-subscription-manager register --org=${SATELLITE_ORG} --activationkey=${SATELLITE_ACTIVATIONKEY}
+if subscription-manager status &>/dev/null; then
+    echo "SKIP: Already registered with Satellite – skipping clean/unregister"
+else
+    echo "Cleaning existing repos and subscriptions..."
+    dnf clean all || true
+    rm -f /etc/yum.repos.d/redhat-rhui*.repo
+    sed -i 's/enabled=1/enabled=0/' /etc/dnf/plugins/amazon-id.conf 2>/dev/null || true
+    subscription-manager unregister 2>/dev/null || true
+    subscription-manager remove --all 2>/dev/null || true
+    subscription-manager clean
 
-##
-########
-## install python3 libraries needed for the Cloud Report
-dnf install -y python3-pip python3-libsemanage
+    OLD_KATELLO=$(rpm -qa | grep katello-ca-consumer || true)
+    if [ -n "$OLD_KATELLO" ]; then
+        rpm -e "$OLD_KATELLO" 2>/dev/null || true
+    fi
+fi
 
-# Create a playbook for the user to execute
-tee /tmp/waz-setup.yml << EOF
-### Wazuh setup
-###
+###############################################################################
+# 6. Register with Satellite
+###############################################################################
+
+CA_CERT="/etc/pki/ca-trust/source/anchors/${SATELLITE_URL}.ca.crt"
+
+run_if_needed "Download Katello CA cert" \
+    test -f "${CA_CERT}" \
+    -- \
+    curl -fsSkL \
+        "https://${SATELLITE_URL}/pub/katello-server-ca.crt" \
+        -o "${CA_CERT}"
+
+retry "Update CA trust" \
+    update-ca-trust extract
+
+run_if_needed "Install Katello consumer RPM" \
+    rpm -q katello-ca-consumer \
+    -- \
+    rpm -Uhv --force "https://${SATELLITE_URL}/pub/katello-ca-consumer-latest.noarch.rpm"
+
+run_if_needed "Register with Satellite" \
+    subscription-manager status \
+    -- \
+    subscription-manager register \
+        --org="${SATELLITE_ORG}" \
+        --activationkey="${SATELLITE_ACTIVATIONKEY}"
+
+retry "Refresh subscription" \
+    subscription-manager refresh
+
+###############################################################################
+# 7. Install packages
+###############################################################################
+
+run_if_needed "Install Python3 libraries" \
+    rpm -q python3-pip python3-libsemanage \
+    -- \
+    dnf install -y python3-pip python3-libsemanage
+
+###############################################################################
+# 8. Wazuh deployment playbook
+###############################################################################
+
+tee /tmp/waz-setup.yml << 'EOF'
 ---
-# =============================================================================
-# Wazuh All-in-One Installation on RHEL + SOC Analyst User Creation
-# =============================================================================
-#
-# This playbook:
-#   1. Installs Wazuh (server, indexer, dashboard) on a single RHEL host
-#   2. Captures the generated admin credentials
-#   3. Extracts all generated passwords from wazuh-install-files.tar
-#   4. Creates a "soc-analyst" user in the Wazuh API and Wazuh Indexer
-#   5. Maps the soc-analyst user to appropriate roles for dashboard access
-#
-# Usage:
-#   ansible-playbook -i inventory.ini wazuh-aio.yml
-#
-# =============================================================================
-
 - name: Wazuh All-in-One Deployment with SOC Analyst User
   hosts: wazuh
   become: true
@@ -65,9 +193,6 @@ tee /tmp/waz-setup.yml << EOF
     credentials_output_file: /root/wazuh-credentials.txt
 
   tasks:
-    # =========================================================================
-    # Pre-flight checks
-    # =========================================================================
     - name: Validate target is a RHEL-based system
       ansible.builtin.assert:
         that:
@@ -83,9 +208,6 @@ tee /tmp/waz-setup.yml << EOF
           Minimum requirements not met.
           RAM: {{ ansible_memtotal_mb }}MB (need >=4GB), CPUs: {{ ansible_processor_vcpus }} (need >=2)
 
-    # =========================================================================
-    # Install Wazuh All-in-One
-    # =========================================================================
     - name: Download Wazuh installation assistant
       ansible.builtin.get_url:
         url: "{{ wazuh_install_script }}"
@@ -105,9 +227,6 @@ tee /tmp/waz-setup.yml << EOF
         var: wazuh_install_output.stdout_lines
       when: wazuh_install_output is defined
 
-    # =========================================================================
-    # Capture admin credentials from install output
-    # =========================================================================
     - name: Extract admin password from installation output
       ansible.builtin.set_fact:
         admin_password: >-
@@ -127,9 +246,6 @@ tee /tmp/waz-setup.yml << EOF
           - "============================================"
       when: admin_password is defined
 
-    # =========================================================================
-    # Extract ALL passwords from wazuh-install-files.tar
-    # =========================================================================
     - name: Extract passwords file from wazuh-install-files.tar
       ansible.builtin.command:
         cmd: tar -O -xvf /root/wazuh-install-files.tar wazuh-install-files/wazuh-passwords.txt
@@ -160,9 +276,6 @@ tee /tmp/waz-setup.yml << EOF
         owner: root
         group: root
 
-    # =========================================================================
-    # Extract Wazuh API credentials (wazuh / wazuh-wui)
-    # =========================================================================
     - name: Extract Wazuh API admin password (wazuh user)
       ansible.builtin.set_fact:
         wazuh_api_password: >-
@@ -178,9 +291,6 @@ tee /tmp/waz-setup.yml << EOF
              | regex_search("api_username: 'wazuh-wui'\n\s*api_password: '([^']+)'", '\1')
              | first }}
 
-    # =========================================================================
-    # Wait for services to be fully ready
-    # =========================================================================
     - name: Wait for Wazuh Indexer to be ready
       ansible.builtin.uri:
         url: "https://localhost:{{ wazuh_indexer_port }}/"
@@ -206,9 +316,6 @@ tee /tmp/waz-setup.yml << EOF
       delay: 10
       until: api_health.status in [200, 401]
 
-    # =========================================================================
-    # Create SOC Analyst user in Wazuh API (port 55000)
-    # =========================================================================
     - name: Authenticate to Wazuh API and obtain JWT token
       ansible.builtin.uri:
         url: "https://localhost:{{ wazuh_api_port }}/security/user/authenticate"
@@ -255,7 +362,7 @@ tee /tmp/waz-setup.yml << EOF
           Content-Type: application/json
       register: api_roles
 
-    - name: Find the 'readonly' role ID
+    - name: Find the readonly role ID
       ansible.builtin.set_fact:
         readonly_role_id: >-
           {{ api_roles.json.data.affected_items
@@ -274,9 +381,6 @@ tee /tmp/waz-setup.yml << EOF
         status_code: [200]
       register: api_role_assigned
 
-    # =========================================================================
-    # Create SOC Analyst user in Wazuh Indexer (for Dashboard login)
-    # =========================================================================
     - name: Create soc-analyst user in Wazuh Indexer
       ansible.builtin.uri:
         url: "https://localhost:{{ wazuh_indexer_port }}/_plugins/_security/api/internalusers/{{ soc_user }}"
@@ -326,9 +430,6 @@ tee /tmp/waz-setup.yml << EOF
               - "{{ soc_user }}"
         status_code: [200]
 
-    # =========================================================================
-    # Disable Wazuh repo to prevent accidental upgrades (recommended)
-    # =========================================================================
     - name: Disable Wazuh YUM repository
       ansible.builtin.replace:
         path: /etc/yum.repos.d/wazuh.repo
@@ -336,9 +437,6 @@ tee /tmp/waz-setup.yml << EOF
         replace: 'enabled=0'
       when: ansible_pkg_mgr in ['yum', 'dnf']
 
-    # =========================================================================
-    # Append soc-analyst credentials to the saved file
-    # =========================================================================
     - name: Append soc-analyst credentials to saved credentials file
       ansible.builtin.blockinfile:
         path: "{{ credentials_output_file }}"
@@ -351,18 +449,12 @@ tee /tmp/waz-setup.yml << EOF
           API Role: readonly
           Dashboard Roles: readall, kibana_user
 
-    # =========================================================================
-    # Fetch credentials file to Ansible controller
-    # =========================================================================
     - name: Fetch credentials file to controller
       ansible.builtin.fetch:
         src: "{{ credentials_output_file }}"
         dest: "./credentials/{{ inventory_hostname }}-wazuh-credentials.txt"
         flat: true
 
-    # =========================================================================
-    # Final summary
-    # =========================================================================
     - name: Print final summary
       ansible.builtin.debug:
         msg:
@@ -385,11 +477,9 @@ tee /tmp/waz-setup.yml << EOF
           - "    Local:  ./credentials/{{ inventory_hostname }}-wazuh-credentials.txt"
           - ""
           - "============================================================"
-
-
-
 EOF
+
 export ANSIBLE_LOCALHOST_WARNING=False
 export ANSIBLE_INVENTORY_UNPARSED_WARNING=False
 
-#ANSIBLE_COLLECTIONS_PATH=/root/ansible-automation-platform-containerized-setup/collections/ansible_collections ansible-playbook -i /tmp/inventory /tmp/waz-setup.yml
+echo "✓ wazuh setup complete"
