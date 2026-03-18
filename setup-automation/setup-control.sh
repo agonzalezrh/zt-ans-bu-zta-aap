@@ -1,99 +1,99 @@
 #!/bin/bash
-set -euo pipefail
+# set -euo pipefail
 
-###############################################################################
-# Retry helper
-###############################################################################
-retry() {
-    local desc="$1"
-    shift
-    local max_attempts=3
-    local delay=5
+# ###############################################################################
+# # Retry helper
+# ###############################################################################
+# retry() {
+#     local desc="$1"
+#     shift
+#     local max_attempts=3
+#     local delay=5
 
-    for ((i = 1; i <= max_attempts; i++)); do
-        echo "Attempt $i/$max_attempts: $desc"
-        if "$@"; then
-            return 0
-        fi
-        if [ $i -lt $max_attempts ]; then
-            echo "  Failed. Retrying in ${delay}s..."
-            sleep $delay
-        fi
-    done
+#     for ((i = 1; i <= max_attempts; i++)); do
+#         echo "Attempt $i/$max_attempts: $desc"
+#         if "$@"; then
+#             return 0
+#         fi
+#         if [ $i -lt $max_attempts ]; then
+#             echo "  Failed. Retrying in ${delay}s..."
+#             sleep $delay
+#         fi
+#     done
 
-    echo "FATAL: Failed after $max_attempts attempts: $desc"
-    exit 1
-}
+#     echo "FATAL: Failed after $max_attempts attempts: $desc"
+#     exit 1
+# }
 
-###############################################################################
-# Validate required variables
-###############################################################################
-for var in SATELLITE_URL SATELLITE_ORG SATELLITE_ACTIVATIONKEY; do
-    if [ -z "${!var:-}" ]; then
-        echo "ERROR: $var is not set"
-        exit 1
-    fi
-done
+# ###############################################################################
+# # Validate required variables
+# ###############################################################################
+# for var in SATELLITE_URL SATELLITE_ORG SATELLITE_ACTIVATIONKEY; do
+#     if [ -z "${!var:-}" ]; then
+#         echo "ERROR: $var is not set"
+#         exit 1
+#     fi
+# done
 
-###############################################################################
-# Clean up subscriptions and stale repos
-###############################################################################
-dnf clean all || true
-rm -f /etc/yum.repos.d/redhat-rhui*.repo
+# ###############################################################################
+# # Clean up subscriptions and stale repos
+# ###############################################################################
+# dnf clean all || true
+# rm -f /etc/yum.repos.d/redhat-rhui*.repo
 
-# Disable AWS-specific dnf plugin (noisy traceback on non-AWS or post-Satellite)
-sed -i 's/enabled=1/enabled=0/' /etc/dnf/plugins/amazon-id.conf 2>/dev/null || true
+# # Disable AWS-specific dnf plugin (noisy traceback on non-AWS or post-Satellite)
+# sed -i 's/enabled=1/enabled=0/' /etc/dnf/plugins/amazon-id.conf 2>/dev/null || true
 
-subscription-manager unregister 2>/dev/null || true
-subscription-manager remove --all 2>/dev/null || true
-subscription-manager clean
+# subscription-manager unregister 2>/dev/null || true
+# subscription-manager remove --all 2>/dev/null || true
+# subscription-manager clean
 
-# Remove old Katello consumer RPM if present
-OLD_KATELLO=$(rpm -qa | grep katello-ca-consumer || true)
-if [ -n "$OLD_KATELLO" ]; then
-    rpm -e "$OLD_KATELLO"
-fi
+# # Remove old Katello consumer RPM if present
+# OLD_KATELLO=$(rpm -qa | grep katello-ca-consumer || true)
+# if [ -n "$OLD_KATELLO" ]; then
+#     rpm -e "$OLD_KATELLO"
+# fi
 
-###############################################################################
-# Register with Satellite
-###############################################################################
-retry "Download Katello CA cert" \
-    curl -sS -k -L \
-    "https://${SATELLITE_URL}/pub/katello-server-ca.crt" \
-    -o "/etc/pki/ca-trust/source/anchors/${SATELLITE_URL}.ca.crt"
+# ###############################################################################
+# # Register with Satellite
+# ###############################################################################
+# retry "Download Katello CA cert" \
+#     curl -sS -k -L \
+#     "https://${SATELLITE_URL}/pub/katello-server-ca.crt" \
+#     -o "/etc/pki/ca-trust/source/anchors/${SATELLITE_URL}.ca.crt"
 
-retry "Update CA trust" \
-    update-ca-trust extract
+# retry "Update CA trust" \
+#     update-ca-trust extract
 
-retry "Install Katello consumer RPM" \
-    rpm -Uhv --force "https://${SATELLITE_URL}/pub/katello-ca-consumer-latest.noarch.rpm"
+# retry "Install Katello consumer RPM" \
+#     rpm -Uhv --force "https://${SATELLITE_URL}/pub/katello-ca-consumer-latest.noarch.rpm"
 
-retry "Register with Satellite" \
-    subscription-manager register \
-    --org="${SATELLITE_ORG}" \
-    --activationkey="${SATELLITE_ACTIVATIONKEY}"
+# retry "Register with Satellite" \
+#     subscription-manager register \
+#     --org="${SATELLITE_ORG}" \
+#     --activationkey="${SATELLITE_ACTIVATIONKEY}"
 
-retry "Refresh subscription" \
-    subscription-manager refresh
+# retry "Refresh subscription" \
+#     subscription-manager refresh
 
-###############################################################################
-# Install packages
-###############################################################################
-retry "Install base packages" \
-    dnf install -y dnf-utils git nano
+# ###############################################################################
+# # Install packages
+# ###############################################################################
+# retry "Install base packages" \
+#     dnf install -y dnf-utils git nano
 
-retry "Add Docker repo" \
-    dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+# retry "Add Docker repo" \
+#     dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
 
-retry "Install IPA client packages" \
-    dnf install -y ipa-client sssd oddjob-mkhomedir
+# retry "Install IPA client packages" \
+#     dnf install -y ipa-client sssd oddjob-mkhomedir
 
-retry "Install Python3 libraries" \
-    dnf install -y python3-pip python3-libsemanage
-###############################################################################
-# SELinux
-###############################################################################
-setenforce 0
+# retry "Install Python3 libraries" \
+#     dnf install -y python3-pip python3-libsemanage
+# ###############################################################################
+# # SELinux
+# ###############################################################################
+# setenforce 0
 
 ###############################################################################
 # /etc/hosts
