@@ -34,7 +34,7 @@ retry "dnf install -y dnf-utils git nano" "Install base packages"
 retry "dnf install -y python3-pip python3-libsemanage git ansible-core python-requests ipa-client sssd oddjob-mkhomedir" "Install system packages"
 
 setenforce 0
-retry "git clone https://github.com/nmartins0611/zta-workshop-aap.git /tmp/zta-workshop-aap" "Clone ZTA workshop repo"
+git clone https://github.com/nmartins0611/zta-workshop-aap.git /tmp/zta-workshop-aap" "Clone ZTA workshop repo
 
 mkdir /tmp/group_vars
 
