@@ -71,7 +71,19 @@ for var in SATELLITE_URL SATELLITE_ORG SATELLITE_ACTIVATIONKEY; do
 done
 
 ###############################################################################
-# 2. SELinux — set permissive (idempotent)
+# 2. Enable subscription-manager repo management (idempotent)
+###############################################################################
+
+CURRENT_MANAGE_REPOS=$(subscription-manager config --list | grep -oP 'manage_repos\s*=\s*\[\K[^\]]+' || echo "unknown")
+if [ "$CURRENT_MANAGE_REPOS" = "1" ]; then
+    echo "SKIP: manage_repos already enabled"
+else
+    subscription-manager config --rhsm.manage_repos=1
+    subscription-manager refresh
+fi
+
+###############################################################################
+# 3. SELinux — set permissive (idempotent)
 ###############################################################################
 
 CURRENT_MODE=$(getenforce)
@@ -83,7 +95,7 @@ else
 fi
 
 ###############################################################################
-# 3. /etc/hosts (idempotent)
+# 4. /etc/hosts (idempotent)
 ###############################################################################
 
 ensure_hosts_entry "192.168.1.10" "control.zta.lab control"
@@ -94,7 +106,7 @@ ensure_hosts_entry "192.168.1.14" "node01.zta.lab node01"
 ensure_hosts_entry "192.168.1.15" "netbox.zta.lab netbox"
 
 ###############################################################################
-# 4. Network configuration (idempotent)
+# 5. Network configuration (idempotent)
 ###############################################################################
 
 ensure_nmcli_connection "eth1" \
@@ -108,7 +120,7 @@ ensure_nmcli_connection "eth1" \
 nmcli connection up eth1 || true
 
 ###############################################################################
-# 5. Clean repos & subscriptions (only if not registered)
+# 6. Clean repos & subscriptions (only if not registered)
 ###############################################################################
 
 if subscription-manager identity &>/dev/null; then
@@ -129,7 +141,7 @@ else
 fi
 
 ###############################################################################
-# 6. Register with Satellite
+# 7. Register with Satellite
 ###############################################################################
 
 CA_CERT="/etc/pki/ca-trust/source/anchors/${SATELLITE_URL}.ca.crt"
@@ -160,7 +172,7 @@ retry "Refresh subscription" \
     subscription-manager refresh
 
 ###############################################################################
-# 7. Install packages
+# 8. Install packages
 ###############################################################################
 
 run_if_needed "Install base packages" \
@@ -179,7 +191,7 @@ run_if_needed "Install Python3 libraries" \
     dnf install -y python3-libsemanage
 
 ###############################################################################
-# 8. Clone workshop repo (idempotent)
+# 9. Clone workshop repo (idempotent)
 ###############################################################################
 
 if [ -d /tmp/zta-aap-workshop ]; then
