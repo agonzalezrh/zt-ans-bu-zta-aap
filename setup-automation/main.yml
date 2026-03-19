@@ -19,9 +19,9 @@
       - control
       - wazuh
       - vault
-   #   - node01
+      - node01
       - central
-   #   - netbox
+      - netbox
 
 - name: Demo Playbook for the ansible-runner API
   hosts: all:!localhost
