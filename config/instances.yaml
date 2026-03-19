@@ -235,24 +235,12 @@ virtualmachines:
             protocol: TCP
             targetPort: 8181
             name: opa-http
-      # - name: idm-http
-      #   ports:
-      #     - port: 80
-      #       protocol: TCP
-      #       targetPort: 80
-      #       name: idm-http
-      # - name: keycloak-http
-      #   ports:
-      #     - port: 8080
-      #       protocol: TCP
-      #       targetPort: 8080
-      #       name: keycloak-http
-      - name: idm-http
+      - name: idm-https
         ports:
           - port: 80
             protocol: TCP
             targetPort: 80
-            name: idm-http
+            name: idm-https
       - name: keycloak-https
         ports:
           - port: 8543
@@ -262,7 +250,7 @@ virtualmachines:
     routes:
       - name: idm-https
         host: idm-https
-        service: idm-http
+        service: idm-https
         targetPort: 80
         tls: true
         tls_termination: Edge
