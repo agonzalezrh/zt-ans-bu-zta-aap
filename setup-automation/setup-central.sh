@@ -1,6 +1,39 @@
 #!/bin/bash
 set -euo pipefail
 systemctl stop firewalld
+
+
+###############################################################################
+# Setup AH
+###############################################################################
+
+if [ -z "$AH_TOKEN" ]; then
+    echo "Error: AH_TOKEN environment variable is not set"
+    echo "Usage: AH_TOKEN='your-token-here' $0"
+    exit 1
+fi
+
+# Create ~/.ansible.cfg with AH_TOKEN substituted
+tee ~/.ansible.cfg > /dev/null <<EOF
+[defaults]
+[galaxy]
+server_list = automation_hub, validated, galaxy
+[galaxy_server.automation_hub]
+url = https://console.redhat.com/api/automation-hub/content/published/
+auth_url = https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token
+token=$AH_TOKEN
+[galaxy_server.validated]
+url = https://console.redhat.com/api/automation-hub/content/validated/
+auth_url = https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token
+token=$AH_TOKEN
+[galaxy_server.galaxy]
+url=https://galaxy.ansible.com/
+#token=""
+[ssh_connection]
+ssh_args = -o ControlMaster=auto -o ControlPersist=60s
+pipelining = True
+EOF
+
 ###############################################################################
 # Helpers
 ###############################################################################
@@ -403,6 +436,7 @@ collections:
   - name: ansible.netcommon
   - name: community.postgresql
   - name: community.general
+  - name: redhat.rhel_idm
 EOF
 
 tee /tmp/inventory << 'EOF'
@@ -615,4 +649,5 @@ IPA
     systemctl reload httpd
 fi
 
+rm -rf ~/.ansible.cfg
 echo "✓ central setup complete"
