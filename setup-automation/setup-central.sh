@@ -662,4 +662,219 @@ fi
 
 rm -rf ~/.ansible.cfg
 
+tee /tmp/zt-splunk.yml << 'EOF'
+---
+- name: Create Splunk data directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: root
+    group: root
+  become: true
+  loop:
+    - "{{ splunk_data_dir }}"
+    - "{{ splunk_data_dir }}/var"
+    - "{{ splunk_data_dir }}/etc"
+    - "{{ splunk_data_dir }}/etc/apps"
+
+- name: Stop any existing Splunk container
+  containers.podman.podman_container:
+    name: "{{ splunk_container_name }}"
+    state: absent
+  become: true
+  failed_when: false
+
+- name: Run Splunk container
+  containers.podman.podman_container:
+    name: "{{ splunk_container_name }}"
+    image: "{{ splunk_image }}"
+    state: started
+    ports:
+      - "{{ splunk_host_port }}:{{ splunk_container_port }}"
+      - "{{ splunk_syslog_host_port }}:{{ splunk_syslog_container_port }}/tcp"
+      - "{{ splunk_syslog_host_port }}:{{ splunk_syslog_container_port }}/udp"
+      - "{{ splunk_syslog_alt_host_port }}:{{ splunk_syslog_alt_container_port }}/tcp"
+      - "{{ splunk_syslog_alt_host_port }}:{{ splunk_syslog_alt_container_port }}/udp"
+      - "{{ splunk_hec_host_port }}:{{ splunk_hec_container_port }}"
+    privileged: "{{ splunk_privileged }}"
+    env:
+      SPLUNK_START_ARGS: "{{ splunk_start_args }}"
+      SPLUNK_GENERAL_TERMS: "{{ splunk_general_terms }}"
+      SPLUNK_PASSWORD: "{{ splunk_password }}"
+    volume:
+      - "{{ splunk_data_dir }}/var:/opt/splunk/var"
+      - "{{ splunk_data_dir }}/etc:/opt/splunk/etc"
+    detach: true
+  become: true
+
+- name: Wait for Splunk to be ready
+  ansible.builtin.uri:
+    url: "http://localhost:{{ splunk_host_port }}"
+    method: GET
+    status_code: [200, 302]
+  register: splunk_health_check
+  until: splunk_health_check.status in [200, 302]
+  retries: 20
+  delay: 5
+  ignore_errors: true
+
+- name: Create temporary directory for Splunk apps
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: splunk_apps
+  register: temp_apps_dir
+  become: true
+
+- name: Download Splunk apps from S3
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "{{ temp_apps_dir.path }}/{{ item.filename }}"
+    mode: '0644'
+  become: true
+  loop: "{{ splunk_apps }}"
+
+- name: Copy app tarballs into Splunk container
+  containers.podman.podman_container_copy:
+    container: "{{ splunk_container_name }}"
+    src: "{{ temp_apps_dir.path }}/{{ item.filename }}"
+    dest: "/tmp/{{ item.filename }}"
+  become: true
+  loop: "{{ splunk_apps }}"
+
+- name: Extract Splunk apps inside container
+  containers.podman.podman_container_exec:
+    name: "{{ splunk_container_name }}"
+    command: "tar -xzf /tmp/{{ item.filename }} -C {{ splunk_container_apps_path }}"
+    user: root
+  become: true
+  loop: "{{ splunk_apps }}"
+
+- name: Set ownership of app files to splunk user
+  containers.podman.podman_container_exec:
+    name: "{{ splunk_container_name }}"
+    command: "chown -R {{ splunk_app_owner }}:{{ splunk_app_group }} {{ splunk_container_apps_path }}"
+    user: root
+  become: true
+
+- name: Clean up app tarballs from container
+  containers.podman.podman_container_exec:
+    name: "{{ splunk_container_name }}"
+    command: "rm -f /tmp/{{ item.filename }}"
+    user: root
+  become: true
+  ignore_errors: true
+  loop: "{{ splunk_apps }}"
+
+- name: Clean up temporary directory
+  ansible.builtin.file:
+    path: "{{ temp_apps_dir.path }}"
+    state: absent
+  become: true
+
+- name: Restart Splunk container to load the apps
+  containers.podman.podman_container:
+    name: "{{ splunk_container_name }}"
+    state: started
+    restart: true
+  become: true
+
+- name: Wait for Splunk to be ready after restart
+  ansible.builtin.uri:
+    url: "http://localhost:{{ splunk_host_port }}"
+    method: GET
+    status_code: [200, 302]
+  register: splunk_health_check_restart
+  until: splunk_health_check_restart.status in [200, 302]
+  retries: 20
+  delay: 5
+
+- name: Generate systemd service file for Splunk container
+  containers.podman.podman_generate_systemd:
+    name: "{{ splunk_container_name }}"
+    dest: /etc/systemd/system/
+    restart_policy: always
+    new: false
+  become: true
+  when: splunk_service_enable | bool
+
+- name: Enable and start Splunk systemd service
+  ansible.builtin.systemd:
+    name: "{{ splunk_service_name }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+  when: splunk_service_enable | bool
+
+- name: Display Splunk access information
+  ansible.builtin.debug:
+    msg:
+      - "Splunk is now running and accessible at:"
+      - "URL: http://{{ ansible_default_ipv4.address }}:{{ splunk_host_port }}"
+      - "Username: admin"
+      - "Password: {{ splunk_password }}"
+      - ""
+      - "Installed apps:"
+      - "{{ splunk_apps | map(attribute='filename') | list }}"
+      - ""
+      - "Systemd service: {{ splunk_service_name }}"
+      - "Check status: systemctl status {{ splunk_service_name }}"
+      - "View logs: journalctl -u {{ splunk_service_name }} -f"
+
+EOF
+
+tee /tmp/splunk_vars.yml << 'EOF'
+---
+# Splunk container configuration
+splunk_container_name: splunk
+splunk_image: splunk/splunk:latest
+splunk_privileged: true
+
+# Port configuration
+splunk_host_port: 8000
+splunk_container_port: 8000
+
+# Syslog port configuration
+splunk_syslog_host_port: 5514
+splunk_syslog_container_port: 5514
+
+# Additional syslog port configuration
+splunk_syslog_alt_host_port: 1514
+splunk_syslog_alt_container_port: 1514
+
+# HTTP Event Collector port configuration
+splunk_hec_host_port: 8088
+splunk_hec_container_port: 8088
+
+# Authentication configuration
+splunk_password: "{{ common_password | default('admin123') }}"
+
+# Data directory configuration
+splunk_data_dir: /opt/splunk-data
+splunk_container_data_dir: /opt/splunk/var
+
+# Splunk startup configuration
+splunk_start_args: "--accept-license"
+splunk_general_terms: "--accept-sgt-current-at-splunk-com"
+
+# Splunk apps to install (list of apps)
+splunk_apps:
+  - url: "https://my-splunk-apps.s3.us-east-1.amazonaws.com/apps/app-for-cisco-network-data_281.tgz"
+    filename: "app-for-cisco-network-data_281.tgz"
+  - url: "https://my-splunk-apps.s3.us-east-1.amazonaws.com/apps/deprecated-add-on-for-cisco-network-data_279.tgz"
+    filename: "deprecated-add-on-for-cisco-network-data_279.tgz"
+  - url: "https://my-splunk-apps.s3.us-east-1.amazonaws.com/apps/red-hat-event-driven-ansible-add-on-for-splunk_101.tgz"
+    filename: "red-hat-event-driven-ansible-add-on-for-splunk_101.tgz"
+
+splunk_container_apps_path: "/opt/splunk/etc/apps/"
+splunk_app_owner: "splunk"
+splunk_app_group: "splunk"
+
+# Systemd service configuration
+splunk_service_enable: true
+splunk_service_name: "container-{{ splunk_container_name }}"
+
+EOF
+
 echo "✓ central setup complete"
