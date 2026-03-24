@@ -447,6 +447,7 @@ collections:
   - name: community.postgresql
   - name: community.general
   - name: redhat.rhel_idm
+  - name: containers.podman
 EOF
 
 tee /tmp/inventory << 'EOF'
