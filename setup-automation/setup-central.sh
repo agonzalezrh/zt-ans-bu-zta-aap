@@ -636,10 +636,10 @@ ansible-playbook -i /tmp/inventory /tmp/zta-setup.yml
 
 
 ###############################################################################
-# 12. Run integration playbook
+# 12. Run integration playbook and IDM DNS
 ###############################################################################
 ansible-playbook -i /tmp/inventory /tmp/zta-workshop-aap/integrate.yml
-
+ansible-playbook -i inventory/hosts.ini setup/configure-dns.yml 
 ###############################################################################
 # 13. IPA rewrite config (idempotent) — must run after integrate.yml
 ###############################################################################
