@@ -631,15 +631,12 @@ tee /tmp/zta-setup.yml << 'PLAYBOOK'
           - "  Kerberos:   OK - admin ticket obtained"
           - "============================================="
 PLAYBOOK
-
 ansible-playbook -i /tmp/inventory /tmp/zta-setup.yml
-
-
-###############################################################################
+##############################################################################
 # 12. Run integration playbook and IDM DNS
 ###############################################################################
 ansible-playbook -i /tmp/inventory /tmp/zta-workshop-aap/integrate.yml
-ansible-playbook -i inventory/hosts.ini /tmp/zta-workshop-aap/setup/configure-dns.yml 
+ansible-playbook -i zta-workshop-aap/inventory/hosts.ini zta-workshop-aap/setup/configure-dns.yml
 ###############################################################################
 # 13. IPA rewrite config (idempotent) — must run after integrate.yml
 ###############################################################################
@@ -863,5 +860,7 @@ tee /tmp/zta-splunk.yml << 'EOF'
           - "View logs: journalctl -u {{ splunk_service_name }} -f"
 
 EOF
+
+ansible-playbook -i /tmp/inventory /tmp/zta-splunk.yml
 
 echo "✓ central setup complete"
