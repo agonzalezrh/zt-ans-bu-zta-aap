@@ -643,7 +643,7 @@ ansible-playbook -i /tmp/inventory /tmp/zta-setup.yml
 ansible-playbook -i /tmp/inventory /tmp/zta-workshop-aap/integrate.yml
 ansible-playbook -i /tmp/zta-workshop-aap/inventory/hosts.ini /tmp/zta-workshop-aap/setup/configure-dns.yml
 ansible-playbook -i /tmp/zta-workshop-aap/inventory/hosts.ini /tmp/zta-workshop-aap/setup/enroll-idm-clients.yml
-ansible-playbook -i /tmp/zta-workshop-aap/inventory/hosts.ini /tmp/zta-workshop-aap/setup/configure-idm-users.yml
+#ansible-playbook -i /tmp/zta-workshop-aap/inventory/hosts.ini /tmp/zta-workshop-aap/setup/configure-idm-users.yml
 ###############################################################################
 # 13. IPA rewrite config (idempotent) — must run after integrate.yml
 ###############################################################################
