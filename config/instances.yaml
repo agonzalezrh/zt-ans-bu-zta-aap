@@ -396,6 +396,18 @@ virtualmachines:
             protocol: TCP
             targetPort: 8088
             name: splunk-hec
+      - name: splunk-mgmt
+        ports:
+          - port: 8089
+            protocol: TCP
+            targetPort: 8089
+            name: splunk-mgmt
+      - name: splunk-fwd
+        ports:
+          - port: 9997
+            protocol: TCP
+            targetPort: 9997
+            name: splunk-fwd
       # ── Wazuh ──
       - name: wazuh-dashboard
         ports:
@@ -427,6 +439,12 @@ virtualmachines:
             protocol: TCP
             targetPort: 1515
             name: wazuh-agent-enroll
+      - name: wazuh-syslog
+        ports:
+          - port: 514
+            protocol: UDP
+            targetPort: 514
+            name: wazuh-syslog
       # ── Arista cEOS switches (SSH) ──
       - name: ceos1-ssh
         ports:
@@ -498,6 +516,13 @@ virtualmachines:
             protocol: TCP
             targetPort: 3000
             name: gitea-http
+      # ── ZTA Dashboard ──
+      - name: dashboard-http
+        ports:
+          - port: 5050
+            protocol: TCP
+            targetPort: 5050
+            name: dashboard-http
     routes:
       - name: idm-https
         host: idm-https
@@ -565,6 +590,12 @@ virtualmachines:
         host: gitea-http
         service: gitea-http
         targetPort: 3000
+        tls: true
+        tls_termination: Edge
+      - name: dashboard-http
+        host: dashboard-http
+        service: dashboard-http
+        targetPort: 5050
         tls: true
         tls_termination: Edge
     userdata: |-
