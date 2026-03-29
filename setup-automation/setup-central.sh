@@ -266,8 +266,8 @@ podman stop keycloak
 systemctl stop container-keycloak
 systemctl kill container-keycloak
 podman rm --force keycloak
-ID=$(podman create --name keycloak --restart=always -p 8180:8080 -p 8543:8443 -e KEYCLOAK_ADMIN=admin -e KEYCLOAK_ADMIN_PASSWORD=ansible123! -e KC_HOSTNAME=keycloak-https-${GUID}.${DOMAIN} -e KC_HTTPS_CERTIFICATE_FILE=/opt/certs/server.crt -e KC_HTTPS_CERTIFICATE_KEY_FILE=/opt/certs/server.key -e KC_HTTP_ENABLED=true -v /opt/keycloak/certs:/opt/certs:Z registry.redhat.io/rhbk/keycloak-rhel9:24 start --hostname=keycloak-https-${GUID}.${DOMAIN} --https-port=8443 --http-enabled=true --proxy-headers forwarded)
-sed -i "s/fe6d67e356a09f1dc2c4dde4d169e095f4abcd80b44e653c5d0cdac4d3292fa2/${ID}/" /etc/systemd/system/container-keycloak.service
+podman create --name keycloak --restart=always -p 8180:8080 -p 8543:8443 -e KEYCLOAK_ADMIN=admin -e KEYCLOAK_ADMIN_PASSWORD=ansible123! -e KC_HOSTNAME=keycloak-https-${GUID}.${DOMAIN} -e KC_HTTPS_CERTIFICATE_FILE=/opt/certs/server.crt -e KC_HTTPS_CERTIFICATE_KEY_FILE=/opt/certs/server.key -e KC_HTTP_ENABLED=true -v /opt/keycloak/certs:/opt/certs:Z registry.redhat.io/rhbk/keycloak-rhel9:24 start --hostname=keycloak-https-${GUID}.${DOMAIN} --https-port=8443 --http-enabled=true --proxy-headers forwarded
+sed -i "s/^PIDFile/d/" /etc/systemd/system/container-keycloak.service
 systemctl daemon-reload
 systemctl start container-keycloak
 
