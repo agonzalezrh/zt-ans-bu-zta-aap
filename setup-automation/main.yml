@@ -118,7 +118,7 @@
     when: set_repositories_subscription_hostname is not defined
     set_fact:
       set_repositories_subscription_hostname: |
-        {{ inventory_hostname }}.{{ guid }}.internal-{{ ansible_date_time.iso8601_basic | lower }}
+        {{ inventory_hostname }}-{{ guid }}-{{ ansible_date_time.iso8601_basic | lower }}
   
   - name: sat | Set network.fqdn in /etc/rhsm/facts/katello.facts
     copy:
