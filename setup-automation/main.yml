@@ -24,6 +24,7 @@
 - name: Demo Playbook for the ansible-runner API
   hosts: all:!localhost
   gather_facts: false
+  become: true
   vars:
     satellite_url: "{{ lookup('ansible.builtin.env', 'SATELLITE_URL') }}"
     satellite_org: "{{ lookup('ansible.builtin.env', 'SATELLITE_ORG') }}"
@@ -134,7 +135,7 @@
   - name: Execute setup-node.sh if it exists
     when: r_script_test.stat.exists
     ansible.builtin.shell: "sh -x /tmp/setup-scripts/setup-{{ ansible_host }}.sh > /tmp/setup-scripts/setup-{{ ansible_host }}.log 2>&1"
-    become: true
+    
     register: r_result
     environment:
       SATELLITE_URL: "{{ satellite_url }}"
