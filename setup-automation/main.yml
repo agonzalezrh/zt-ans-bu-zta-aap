@@ -195,6 +195,7 @@
     when: r_script_test.stat.exists
 
   - name: Write script result to file
+    become: false
     ansible.builtin.copy:
       content: "{{ r_result.stdout | default(r_result.stderr) | default(r_result) }}"
       dest: "/tmp/{{ ansible_host }}-setup-script.out"
