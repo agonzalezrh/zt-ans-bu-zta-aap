@@ -156,6 +156,7 @@
       mode: '0755'
 
   - name: Check if setup-server.sh exists
+    become: false
     ansible.builtin.stat:
       path: "./setup-{{ config_host }}.sh"
     delegate_to: localhost
